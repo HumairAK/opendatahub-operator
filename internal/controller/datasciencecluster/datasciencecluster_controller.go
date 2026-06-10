@@ -30,7 +30,11 @@ import (
 	dscv2 "github.com/opendatahub-io/opendatahub-operator/v2/api/datasciencecluster/v2"
 	dsciv2 "github.com/opendatahub-io/opendatahub-operator/v2/api/dscinitialization/v2"
 	serviceApi "github.com/opendatahub-io/opendatahub-operator/v2/api/services/v1alpha1"
+<<<<<<< HEAD
 	"github.com/opendatahub-io/opendatahub-operator/v2/internal/controller/modules"
+=======
+	modules "github.com/opendatahub-io/opendatahub-operator/v2/internal/controller/modules"
+>>>>>>> 2be69696ee (refactor(mlflowoperator): move MLflow to the module handler path)
 	"github.com/opendatahub-io/opendatahub-operator/v2/internal/controller/status"
 	"github.com/opendatahub-io/opendatahub-operator/v2/pkg/cluster/gvk"
 	"github.com/opendatahub-io/opendatahub-operator/v2/pkg/controller/actions/deploy"
@@ -103,7 +107,9 @@ func NewDataScienceClusterReconciler(ctx context.Context, mgr ctrl.Manager) erro
 			}),
 			reconciler.WithPredicates(
 				resources.CreatedOrUpdatedOrDeletedNamed(gates.AcksConfigMap),
-			)).
+			))
+
+	_, err := b.
 		WithAction(initialize).
 		WithAction(checkPreConditions).
 		WithAction(updateStatus).
