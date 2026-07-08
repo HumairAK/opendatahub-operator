@@ -12,6 +12,7 @@ import (
 
 	"github.com/opendatahub-io/opendatahub-operator/v2/api/common"
 	componentApi "github.com/opendatahub-io/opendatahub-operator/v2/api/components/v1alpha1"
+	configv1alpha1 "github.com/opendatahub-io/opendatahub-operator/v2/api/config/v1alpha1"
 	"github.com/opendatahub-io/opendatahub-operator/v2/internal/controller/components"
 	"github.com/opendatahub-io/opendatahub-operator/v2/internal/controller/modules"
 	"github.com/opendatahub-io/opendatahub-operator/v2/internal/controller/status"
@@ -75,10 +76,16 @@ func NewHandler() *handler {
 }
 
 func (h *handler) IsEnabled(platform *modules.PlatformContext) bool {
-	if platform == nil || platform.DSC == nil {
+	if platform == nil {
 		return false
 	}
-	return platform.DSC.Spec.Components.MLflowOperator.ManagementState == operatorv1.Managed
+	if platform.DSC != nil {
+		return platform.DSC.Spec.Components.MLflowOperator.ManagementState == operatorv1.Managed
+	}
+	if platform.Platform != nil {
+		return platform.Platform.Spec.Modules.MLflowOperator.ManagementState == operatorv1.Managed
+	}
+	return false
 }
 
 func (h *handler) BuildModuleCR(
@@ -86,8 +93,13 @@ func (h *handler) BuildModuleCR(
 	_ client.Client,
 	platform *modules.PlatformContext,
 ) (*unstructured.Unstructured, error) {
-	if platform == nil || platform.DSC == nil {
+	if platform == nil {
 		return nil, errors.New("platform context is nil, cannot build MLflowOperator CR")
+	}
+
+	managementState, err := projectedManagementState(platform)
+	if err != nil {
+		return nil, err
 	}
 
 	// APPLICATIONS_NAMESPACE is injected directly into the operator Deployment so
@@ -109,7 +121,7 @@ func (h *handler) BuildModuleCR(
 	u.SetGroupVersionKind(h.Config.GVK)
 	u.SetName(h.Config.CRName)
 	u.SetAnnotations(map[string]string{
-		annotations.ManagementStateAnnotation: string(platform.DSC.Spec.Components.MLflowOperator.ManagementState),
+		annotations.ManagementStateAnnotation: string(managementState),
 	})
 
 	return u, nil
@@ -178,4 +190,24 @@ func sectionTitle(platformName common.Platform) string {
 		return title
 	}
 	return "MLflow"
+}
+
+func projectedManagementState(platform *modules.PlatformContext) (operatorv1.ManagementState, error) {
+	if platform == nil {
+		return "", errors.New("platform context is nil, cannot project MLflowOperator management state")
+	}
+	if platform.DSC != nil {
+		return components.NormalizeManagementState(platform.DSC.Spec.Components.MLflowOperator.ManagementState), nil
+	}
+	if platform.Platform != nil {
+		return normalizePlatformManagementState(platform.Platform), nil
+	}
+	return "", errors.New("neither DSC nor Platform CR exists, cannot build MLflowOperator CR")
+}
+
+func normalizePlatformManagementState(platform *configv1alpha1.Platform) operatorv1.ManagementState {
+	if platform == nil {
+		return operatorv1.Removed
+	}
+	return components.NormalizeManagementState(platform.Spec.Modules.MLflowOperator.ManagementState)
 }

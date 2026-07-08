@@ -2496,6 +2496,7 @@ _Appears in:_
 | Field | Description | Default | Validation |
 | --- | --- | --- | --- |
 | `aigateway` _[ManagementSpec](#managementspec)_ | AIGateway controls the ai-gateway-operator module lifecycle. |  |  |
+| `mlflowoperator` _[ManagementSpec](#managementspec)_ | MLflowOperator controls the MLflow module operator lifecycle. |  |  |
 | `monitoring` _[ManagementSpec](#managementspec)_ | Monitoring controls the monitoring module operator lifecycle. |  |  |
 | `mcplifecycleoperator` _[ManagementSpec](#managementspec)_ | MCPLifecycleOperator controls the MCP Lifecycle Operator module lifecycle. |  |  |
 
