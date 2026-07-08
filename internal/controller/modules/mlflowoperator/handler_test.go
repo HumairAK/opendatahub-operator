@@ -33,7 +33,10 @@ import (
 	. "github.com/onsi/gomega"
 )
 
-const mlflowTestDSCName = "test-dsc"
+const (
+	mlflowTestDSCName    = "test-dsc"
+	mlflowTestGatewayURL = "gateway.apps.example.com"
+)
 
 func TestIsEnabled(t *testing.T) {
 	handler := NewHandler()
@@ -92,7 +95,7 @@ func TestBuildModuleCR(t *testing.T) {
 
 	moduleCR, err := handler.BuildModuleCR(t.Context(), nil, &modules.PlatformContext{
 		ApplicationsNamespace: "redhat-ods-applications",
-		GatewayDomain:         "gateway.apps.example.com",
+		GatewayDomain:         mlflowTestGatewayURL,
 		Release:               common.Release{Name: cluster.SelfManagedRhoai},
 		DSC:                   dsc,
 	})
@@ -119,7 +122,7 @@ func TestBuildModuleCR(t *testing.T) {
 	}
 
 	gateway, ok := spec["gateway"].(map[string]any)
-	if !ok || gateway["domain"] != "gateway.apps.example.com" {
+	if !ok || gateway["domain"] != mlflowTestGatewayURL {
 		t.Fatalf("expected gateway domain projection, got %#v", spec["gateway"])
 	}
 }
@@ -135,7 +138,7 @@ func TestBuildModuleCRMatchesVendoredCRDSchema(t *testing.T) {
 
 	moduleCR, err := handler.BuildModuleCR(t.Context(), nil, &modules.PlatformContext{
 		ApplicationsNamespace: "redhat-ods-applications",
-		GatewayDomain:         "gateway.apps.example.com",
+		GatewayDomain:         mlflowTestGatewayURL,
 		Release:               common.Release{Name: cluster.SelfManagedRhoai},
 		DSC:                   dsc,
 	})
