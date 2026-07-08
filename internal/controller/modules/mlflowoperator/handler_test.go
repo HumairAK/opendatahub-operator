@@ -5,12 +5,18 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"os"
 	"testing"
 
 	operatorv1 "github.com/openshift/api/operator/v1"
+	apiextensions "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions"
+	apiextensionsv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
+	apiextensionsvalidation "k8s.io/apiextensions-apiserver/pkg/apiserver/validation"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/util/validation/field"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
+	"sigs.k8s.io/yaml"
 
 	"github.com/opendatahub-io/opendatahub-operator/v2/api/common"
 	componentApi "github.com/opendatahub-io/opendatahub-operator/v2/api/components/v1alpha1"
@@ -118,6 +124,37 @@ func TestBuildModuleCR(t *testing.T) {
 	}
 }
 
+func TestBuildModuleCRMatchesVendoredCRDSchema(t *testing.T) {
+	t.Parallel()
+
+	handler := NewHandler()
+	dsc := &dscv2.DataScienceCluster{
+		ObjectMeta: metav1.ObjectMeta{Name: mlflowTestDSCName},
+	}
+	dsc.Spec.Components.MLflowOperator.ManagementState = operatorv1.Managed
+
+	moduleCR, err := handler.BuildModuleCR(t.Context(), nil, &modules.PlatformContext{
+		ApplicationsNamespace: "redhat-ods-applications",
+		GatewayDomain:         "gateway.apps.example.com",
+		Release:               common.Release{Name: cluster.SelfManagedRhoai},
+		DSC:                   dsc,
+	})
+	if err != nil {
+		t.Fatalf("build module CR: %v", err)
+	}
+
+	schema := loadMLflowOperatorSchema(t)
+	validator, _, err := apiextensionsvalidation.NewSchemaValidator(schema)
+	if err != nil {
+		t.Fatalf("build schema validator: %v", err)
+	}
+
+	errs := apiextensionsvalidation.ValidateCustomResource(field.NewPath("mlflowOperator"), moduleCR.Object, validator)
+	if len(errs) > 0 {
+		t.Fatalf("module CR does not match vendored CRD schema: %v", errs.ToAggregate())
+	}
+}
+
 func TestUpdateDSCComponentStatus(t *testing.T) {
 	g := NewWithT(t)
 	handler := NewHandler()
@@ -208,4 +245,42 @@ func TestUpdateDSCComponentStatusPropagatesGetErrors(t *testing.T) {
 	}, &modules.PlatformContext{DSC: dsc})
 	g.Expect(err).Should(HaveOccurred())
 	g.Expect(err.Error()).Should(ContainSubstring("boom"))
+}
+
+func loadMLflowOperatorSchema(t *testing.T) *apiextensions.JSONSchemaProps {
+	t.Helper()
+
+	data, err := os.ReadFile("testdata/components.platform.opendatahub.io_mlflowoperators.yaml")
+	if err != nil {
+		t.Fatalf("read MLflowOperator CRD fixture: %v", err)
+	}
+
+	var crd apiextensionsv1.CustomResourceDefinition
+	if err := yaml.Unmarshal(data, &crd); err != nil {
+		t.Fatalf("unmarshal vendored MLflowOperator CRD: %v", err)
+	}
+
+	var versionSchema *apiextensionsv1.CustomResourceValidation
+	for i := range crd.Spec.Versions {
+		version := &crd.Spec.Versions[i]
+		if version.Storage {
+			versionSchema = version.Schema
+			break
+		}
+	}
+	if versionSchema == nil || versionSchema.OpenAPIV3Schema == nil {
+		t.Fatal("missing storage schema in vendored MLflowOperator CRD")
+	}
+
+	schemaBytes, err := json.Marshal(versionSchema.OpenAPIV3Schema)
+	if err != nil {
+		t.Fatalf("marshal CRD schema: %v", err)
+	}
+
+	var internalSchema apiextensions.JSONSchemaProps
+	if err := json.Unmarshal(schemaBytes, &internalSchema); err != nil {
+		t.Fatalf("convert schema to internal apiextensions form: %v", err)
+	}
+
+	return &internalSchema
 }
