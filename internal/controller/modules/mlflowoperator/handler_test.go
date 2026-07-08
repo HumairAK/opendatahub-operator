@@ -20,6 +20,7 @@ import (
 
 	"github.com/opendatahub-io/opendatahub-operator/v2/api/common"
 	componentApi "github.com/opendatahub-io/opendatahub-operator/v2/api/components/v1alpha1"
+	configv1alpha1 "github.com/opendatahub-io/opendatahub-operator/v2/api/config/v1alpha1"
 	dscv2 "github.com/opendatahub-io/opendatahub-operator/v2/api/datasciencecluster/v2"
 	"github.com/opendatahub-io/opendatahub-operator/v2/internal/controller/modules"
 	"github.com/opendatahub-io/opendatahub-operator/v2/internal/controller/status"
@@ -27,6 +28,7 @@ import (
 	"github.com/opendatahub-io/opendatahub-operator/v2/pkg/cluster/gvk"
 	"github.com/opendatahub-io/opendatahub-operator/v2/pkg/controller/conditions"
 	"github.com/opendatahub-io/opendatahub-operator/v2/pkg/controller/types"
+	"github.com/opendatahub-io/opendatahub-operator/v2/pkg/metadata/annotations"
 	"github.com/opendatahub-io/opendatahub-operator/v2/pkg/utils/test/fakeclient"
 	"github.com/opendatahub-io/opendatahub-operator/v2/pkg/utils/test/matchers/jq"
 
@@ -36,6 +38,7 @@ import (
 const (
 	mlflowTestDSCName    = "test-dsc"
 	mlflowTestGatewayURL = "gateway.apps.example.com"
+	mlflowTestAppsNS     = "redhat-ods-applications"
 )
 
 func TestIsEnabled(t *testing.T) {
@@ -57,6 +60,30 @@ func TestIsEnabled(t *testing.T) {
 	platform.DSC.Spec.Components.MLflowOperator.ManagementState = operatorv1.Managed
 	if !handler.IsEnabled(platform) {
 		t.Fatalf("expected Managed MLflowOperator to enable module")
+	}
+}
+
+func TestIsEnabled_PlatformMode(t *testing.T) {
+	handler := NewHandler()
+
+	platform := &modules.PlatformContext{
+		Platform: &configv1alpha1.Platform{
+			Spec: configv1alpha1.PlatformSpec{
+				Modules: configv1alpha1.PlatformModules{
+					MLflowOperator: common.ManagementSpec{
+						ManagementState: operatorv1.Removed,
+					},
+				},
+			},
+		},
+	}
+	if handler.IsEnabled(platform) {
+		t.Fatalf("expected Removed MLflowOperator platform mode to disable module")
+	}
+
+	platform.Platform.Spec.Modules.MLflowOperator.ManagementState = operatorv1.Managed
+	if !handler.IsEnabled(platform) {
+		t.Fatalf("expected Managed MLflowOperator platform mode to enable module")
 	}
 }
 
@@ -94,7 +121,7 @@ func TestBuildModuleCR(t *testing.T) {
 	dsc.Spec.Components.MLflowOperator.ManagementState = operatorv1.Managed
 
 	moduleCR, err := handler.BuildModuleCR(t.Context(), nil, &modules.PlatformContext{
-		ApplicationsNamespace: "redhat-ods-applications",
+		ApplicationsNamespace: mlflowTestAppsNS,
 		GatewayDomain:         mlflowTestGatewayURL,
 		Release:               common.Release{Name: cluster.SelfManagedRhoai},
 		DSC:                   dsc,
@@ -127,6 +154,45 @@ func TestBuildModuleCR(t *testing.T) {
 	}
 }
 
+func TestBuildModuleCR_PlatformMode(t *testing.T) {
+	handler := NewHandler()
+
+	moduleCR, err := handler.BuildModuleCR(t.Context(), nil, &modules.PlatformContext{
+		ApplicationsNamespace: mlflowTestAppsNS,
+		Release:               common.Release{Name: cluster.SelfManagedRhoai},
+		Platform: &configv1alpha1.Platform{
+			Spec: configv1alpha1.PlatformSpec{
+				Modules: configv1alpha1.PlatformModules{
+					MLflowOperator: common.ManagementSpec{
+						ManagementState: operatorv1.Managed,
+					},
+				},
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("build module CR in platform mode: %v", err)
+	}
+
+	spec, ok := moduleCR.Object["spec"].(map[string]any)
+	if !ok {
+		t.Fatalf("expected unstructured spec map, got %#v", moduleCR.Object["spec"])
+	}
+	if spec["gatewayName"] != defaultGatewayName {
+		t.Fatalf("expected gatewayName %q, got %#v", defaultGatewayName, spec["gatewayName"])
+	}
+	if spec["sectionTitle"] != "OpenShift Self Managed Services" {
+		t.Fatalf("expected RHOAI section title, got %#v", spec["sectionTitle"])
+	}
+	if _, found := spec["gateway"]; found {
+		t.Fatalf("expected empty gateway projection without platform gateway domain, got %#v", spec["gateway"])
+	}
+
+	if got := moduleCR.GetAnnotations()[annotations.ManagementStateAnnotation]; got != string(operatorv1.Managed) {
+		t.Fatalf("expected management state annotation %q, got %q", operatorv1.Managed, got)
+	}
+}
+
 func TestBuildModuleCRMatchesVendoredCRDSchema(t *testing.T) {
 	t.Parallel()
 
@@ -137,7 +203,7 @@ func TestBuildModuleCRMatchesVendoredCRDSchema(t *testing.T) {
 	dsc.Spec.Components.MLflowOperator.ManagementState = operatorv1.Managed
 
 	moduleCR, err := handler.BuildModuleCR(t.Context(), nil, &modules.PlatformContext{
-		ApplicationsNamespace: "redhat-ods-applications",
+		ApplicationsNamespace: mlflowTestAppsNS,
 		GatewayDomain:         mlflowTestGatewayURL,
 		Release:               common.Release{Name: cluster.SelfManagedRhoai},
 		DSC:                   dsc,
@@ -155,6 +221,39 @@ func TestBuildModuleCRMatchesVendoredCRDSchema(t *testing.T) {
 	errs := apiextensionsvalidation.ValidateCustomResource(field.NewPath("mlflowOperator"), moduleCR.Object, validator)
 	if len(errs) > 0 {
 		t.Fatalf("module CR does not match vendored CRD schema: %v", errs.ToAggregate())
+	}
+}
+
+func TestBuildModuleCRMatchesVendoredCRDSchemaPlatformMode(t *testing.T) {
+	t.Parallel()
+
+	handler := NewHandler()
+	moduleCR, err := handler.BuildModuleCR(t.Context(), nil, &modules.PlatformContext{
+		ApplicationsNamespace: mlflowTestAppsNS,
+		Release:               common.Release{Name: cluster.SelfManagedRhoai},
+		Platform: &configv1alpha1.Platform{
+			Spec: configv1alpha1.PlatformSpec{
+				Modules: configv1alpha1.PlatformModules{
+					MLflowOperator: common.ManagementSpec{
+						ManagementState: operatorv1.Managed,
+					},
+				},
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("build module CR in platform mode: %v", err)
+	}
+
+	schema := loadMLflowOperatorSchema(t)
+	validator, _, err := apiextensionsvalidation.NewSchemaValidator(schema)
+	if err != nil {
+		t.Fatalf("build schema validator: %v", err)
+	}
+
+	errs := apiextensionsvalidation.ValidateCustomResource(field.NewPath("mlflowOperator"), moduleCR.Object, validator)
+	if len(errs) > 0 {
+		t.Fatalf("platform mode module CR does not match vendored CRD schema: %v", errs.ToAggregate())
 	}
 }
 
