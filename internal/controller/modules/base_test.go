@@ -37,6 +37,11 @@ const (
 	baseTestKeyMetadata        = "metadata"
 	baseTestKeyName            = "name"
 	baseTestKeyNamespace       = "namespace"
+	baseTestKeyConditions      = "conditions"
+	baseTestKeyConditionType   = "type"
+	baseTestKeyConditionStatus = "status"
+	baseTestConditionReadyType = "Ready"
+	baseTestConditionTrue      = "True"
 	baseTestRequiredEnvToggle  = "ENABLE_TEST_MODULE_CONTROLLER"
 )
 
@@ -100,13 +105,13 @@ func TestBaseHandlerGetModuleStatusAndCRLifecycle(t *testing.T) {
 	module.SetGeneration(7)
 	module.Object["status"] = map[string]any{
 		"observedGeneration": int64(7),
-		"conditions": []any{
+		baseTestKeyConditions: []any{
 			map[string]any{
-				"type":               "Ready",
-				"status":             "True",
-				"reason":             "Ready",
-				"message":            "module ready",
-				"observedGeneration": int64(7),
+				baseTestKeyConditionType:   baseTestConditionReadyType,
+				baseTestKeyConditionStatus: baseTestConditionTrue,
+				"reason":                   baseTestConditionReadyType,
+				"message":                  "module ready",
+				"observedGeneration":       int64(7),
 			},
 		},
 		"releases": []any{
