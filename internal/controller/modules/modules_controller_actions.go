@@ -187,7 +187,7 @@ func cleanupDisabledModules(ctx context.Context, rr *odhtype.ReconciliationReque
 				"module", handler.GetName())
 
 			operatorManifests := handler.GetOperatorManifests(platformCtx)
-			appendModuleEnvInjection(rr, platformCtx.ApplicationsNamespace, moduleImagesFor(handler, operatorManifests))
+			appendModuleEnvInjection(rr, platformCtx.ApplicationsNamespace, platformCtx.MonitoringNamespace, moduleImagesFor(handler, operatorManifests))
 			if len(operatorManifests.HelmCharts) > 0 {
 				rr.HelmCharts = append(rr.HelmCharts, operatorManifests.HelmCharts...)
 			}
@@ -291,7 +291,7 @@ func provisionModules(ctx context.Context, rr *odhtype.ReconciliationRequest) er
 					continue
 				}
 
-				appendModuleEnvInjection(rr, platformCtx.ApplicationsNamespace, moduleImagesFor(handler, operatorManifests))
+				appendModuleEnvInjection(rr, platformCtx.ApplicationsNamespace, platformCtx.MonitoringNamespace, moduleImagesFor(handler, operatorManifests))
 				if len(operatorManifests.HelmCharts) > 0 {
 					rr.HelmCharts = append(rr.HelmCharts, operatorManifests.HelmCharts...)
 				}
@@ -307,14 +307,6 @@ func provisionModules(ctx context.Context, rr *odhtype.ReconciliationRequest) er
 
 	if walkErr != nil {
 		return walkErr
-	}
-
-	if len(perModuleImages) > 0 || platformCtx.ApplicationsNamespace != "" || platformCtx.MonitoringNamespace != "" {
-		rr.ModuleEnvInjection = &odhtype.ModuleEnvInjection{
-			PerModuleImages:       perModuleImages,
-			ApplicationsNamespace: platformCtx.ApplicationsNamespace,
-			MonitoringNamespace:   platformCtx.MonitoringNamespace,
-		}
 	}
 
 	if requeueAfter > 0 {
@@ -400,13 +392,17 @@ func moduleImagesFor(h ModuleHandler, manifests OperatorManifests) odhtype.Modul
 	}
 }
 
-func appendModuleEnvInjection(rr *odhtype.ReconciliationRequest, applicationsNamespace string, moduleImages odhtype.ModuleImages) {
+func appendModuleEnvInjection(rr *odhtype.ReconciliationRequest, applicationsNamespace, monitoringNamespace string, moduleImages odhtype.ModuleImages) {
 	if rr.ModuleEnvInjection == nil {
 		rr.ModuleEnvInjection = &odhtype.ModuleEnvInjection{
 			ApplicationsNamespace: applicationsNamespace,
+			MonitoringNamespace:   monitoringNamespace,
 		}
 	} else if rr.ModuleEnvInjection.ApplicationsNamespace == "" {
 		rr.ModuleEnvInjection.ApplicationsNamespace = applicationsNamespace
+	}
+	if rr.ModuleEnvInjection.MonitoringNamespace == "" {
+		rr.ModuleEnvInjection.MonitoringNamespace = monitoringNamespace
 	}
 
 	rr.ModuleEnvInjection.PerModuleImages = append(rr.ModuleEnvInjection.PerModuleImages, moduleImages)
