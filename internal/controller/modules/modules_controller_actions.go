@@ -340,20 +340,6 @@ func containerNameFor(h ModuleHandler) string {
 	return defaultContainerName
 }
 
-// deploymentNameFor resolves the Deployment name targeted for RELATED_IMAGE_*
-// env injection. An explicit Config.DeploymentName (via DeploymentNamer) wins;
-// otherwise it falls back to the manifest-derived name. This matters for
-// kustomize modules whose rendered Deployment name (after namePrefix) differs
-// from the module name.
-func deploymentNameFor(h ModuleHandler, manifests OperatorManifests) string {
-	if dn, ok := h.(DeploymentNamer); ok {
-		if name := dn.GetDeploymentName(); name != "" {
-			return name
-		}
-	}
-	return deploymentNameFromManifests(manifests, h.GetName())
-}
-
 func readyConditionTypeFor(h ModuleHandler) string {
 	if rct, ok := h.(ReadyConditionTyper); ok {
 		return rct.GetReadyConditionType()

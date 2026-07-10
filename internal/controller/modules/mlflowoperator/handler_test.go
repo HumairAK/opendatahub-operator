@@ -286,11 +286,9 @@ func TestUpdateDSCComponentStatus(t *testing.T) {
 	}, &modules.PlatformContext{DSC: dsc})
 	g.Expect(err).ShouldNot(HaveOccurred())
 
-	g.Expect(dsc).Should(WithTransform(json.Marshal, And(
+	g.Expect(dsc).Should(WithTransform(json.Marshal,
 		jq.Match(`.status.components.mlflowoperator.managementState == "%s"`, operatorv1.Managed),
-		jq.Match(`.status.conditions[] | select(.type == "%s") | .status == "%s"`, readyConditionType, metav1.ConditionTrue),
-		jq.Match(`.status.conditions[] | select(.type == "%s") | .reason == "%s"`, readyConditionType, status.ReadyReason),
-	)))
+	))
 }
 
 func TestUpdateDSCComponentStatusNormalizesEmptyManagementState(t *testing.T) {
@@ -311,11 +309,9 @@ func TestUpdateDSCComponentStatusNormalizesEmptyManagementState(t *testing.T) {
 	}, &modules.PlatformContext{DSC: dsc})
 	g.Expect(err).ShouldNot(HaveOccurred())
 
-	g.Expect(dsc).Should(WithTransform(json.Marshal, And(
+	g.Expect(dsc).Should(WithTransform(json.Marshal,
 		jq.Match(`.status.components.mlflowoperator.managementState == "%s"`, operatorv1.Removed),
-		jq.Match(`.status.conditions[] | select(.type == "%s") | .reason == "%s"`, readyConditionType, operatorv1.Removed),
-		jq.Match(`.status.conditions[] | select(.type == "%s") | .severity == "%s"`, readyConditionType, common.ConditionSeverityInfo),
-	)))
+	))
 }
 
 func TestUpdateDSCComponentStatusPropagatesGetErrors(t *testing.T) {

@@ -27,7 +27,6 @@ const (
 	moduleName             = componentApi.MLflowOperatorComponentName
 	crName                 = componentApi.MLflowOperatorInstanceName
 	defaultGatewayName     = "data-science-gateway"
-	readyConditionType     = componentApi.MLflowOperatorKind + status.ReadySuffix
 	rhoaiSectionTitle      = "OpenShift Self Managed Services"
 	odhSectionTitle        = "OpenShift Open Data Hub"
 	rhoaiPlatformOverlay   = "overlays/rhoai"
@@ -150,38 +149,19 @@ func (h *handler) UpdateDSCComponentStatus(
 	dsc.Status.Components.MLflowOperator.ManagementState = ms
 	dsc.Status.Components.MLflowOperator.MLflowOperatorCommonStatus = nil
 
-	rr.Conditions.MarkFalse(readyConditionType)
-
 	if !module.GetDeletionTimestamp().IsZero() {
-		rr.Conditions.MarkFalse(
-			readyConditionType,
-			conditions.WithReason(status.DeletingReason),
-			conditions.WithMessage(status.DeletingMessage),
-		)
 		return metav1.ConditionFalse, nil
 	}
 
 	if h.IsEnabled(platform) {
 		dsc.Status.Components.MLflowOperator.MLflowOperatorCommonStatus = module.Status.MLflowOperatorCommonStatus.DeepCopy()
 		if rc := conditions.FindStatusCondition(module.GetStatus(), status.ConditionTypeReady); rc != nil {
-			rr.Conditions.MarkFrom(readyConditionType, *rc)
 			return rc.Status, nil
 		}
 
-		rr.Conditions.MarkFalse(
-			readyConditionType,
-			conditions.WithReason(status.NotReadyReason),
-			conditions.WithMessage("MLflowOperator module is not ready"),
-		)
 		return metav1.ConditionFalse, nil
 	}
 
-	rr.Conditions.MarkFalse(
-		readyConditionType,
-		conditions.WithReason(string(ms)),
-		conditions.WithMessage("Component ManagementState is set to %s", string(ms)),
-		conditions.WithSeverity(common.ConditionSeverityInfo),
-	)
 	return metav1.ConditionUnknown, nil
 }
 
