@@ -172,10 +172,15 @@ func addModuleCRWatches[T common.PlatformObject](b *reconciler.ReconcilerBuilder
 	return b
 }
 
-// AddDSCCompatibilityProjectorWatches registers watches for module CRs that
-// feed compatibility status back into the user-facing DSC. Once DSC status
-// ownership moved to the datasciencecluster controller, those same module CR
-// status changes must also requeue the DSC controller.
+// AddDSCCompatibilityProjectorWatches registers watches for module CR status
+// changes that must requeue the user-facing DSC controller.
+//
+// The datasciencecluster controller computes both generic module readiness
+// (ModulesReady, AIGatewayReady, etc.) via ComputeModulesStatus and any
+// compatibility projections implemented by specific handlers. That means DSC
+// must watch every registered module CR, not only handlers implementing
+// DSCStatusProjector, otherwise non-projector modules can reach Ready without
+// triggering a DSC status refresh.
 func AddDSCCompatibilityProjectorWatches[T common.PlatformObject](b *reconciler.ReconcilerBuilder[T]) *reconciler.ReconcilerBuilder[T] {
 	reg := DefaultRegistry()
 	if !reg.HasEntries() {
@@ -183,13 +188,11 @@ func AddDSCCompatibilityProjectorWatches[T common.PlatformObject](b *reconciler.
 	}
 
 	_ = reg.ForAll(func(handler ModuleHandler, _ bool) error {
-		if _, ok := handler.(DSCStatusProjector); !ok {
-			return nil
-		}
 		// Requeue the DSC controller from module CR status changes without
 		// claiming ownership of the module CR type itself. The modules
 		// controller provisions module CRs; the DSC controller only needs the
-		// watch for compatibility-status projection.
+		// watch so its generic module status and any compatibility projections
+		// stay current as module CRs transition.
 		b.WatchesGVK(
 			handler.GetGVK(),
 			reconciler.Dynamic(reconciler.CrdExists(handler.GetGVK())),
