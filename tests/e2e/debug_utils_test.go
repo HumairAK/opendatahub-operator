@@ -7,6 +7,7 @@ import (
 	"io"
 	"log"
 	"regexp"
+	"sort"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -17,6 +18,7 @@ import (
 	k8serr "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/kubernetes"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -24,6 +26,7 @@ import (
 
 	"github.com/opendatahub-io/opendatahub-operator/pkg/clusterhealth"
 	"github.com/opendatahub-io/opendatahub-operator/v2/api/common"
+	componentApi "github.com/opendatahub-io/opendatahub-operator/v2/api/components/v1alpha1"
 	"github.com/opendatahub-io/opendatahub-operator/v2/pkg/cluster/gvk"
 	"github.com/opendatahub-io/opendatahub-operator/v2/pkg/failureclassifier"
 )
@@ -43,6 +46,10 @@ const (
 	testManagerName = "manager"
 	testMLflowPod   = "mlflow-operator-controller-manager-0"
 	testNamespace   = "opendatahub"
+
+	aiGatewayOperatorDeploymentName = "ai-gateway-operator"
+	aiGatewayReadyCondition         = "AIGatewayReady"
+	aiGatewayCRDName                = "aigateways.components.platform.opendatahub.io"
 )
 
 var (
@@ -187,6 +194,7 @@ func logReport(report *clusterhealth.Report) {
 	logOperatorSection(report)
 	logCRConditionsSection("DSCI", report.DSCI)
 	logCRConditionsSection("DSC", report.DSC)
+	logAIGatewayDiagnostics(report)
 	logEventsSection(report)
 	logQuotasSection(report)
 }
@@ -391,6 +399,246 @@ func logQuotasSection(report *clusterhealth.Report) {
 	}
 }
 
+func logAIGatewayDiagnostics(report *clusterhealth.Report) {
+	if !hasConditionStatus(report.DSC.Data.Conditions, aiGatewayReadyCondition, metav1.ConditionFalse) {
+		return
+	}
+
+	log.Printf("=== AIGATEWAY DIAGNOSTICS ===")
+
+	if report.DSCI.Data.Data != nil {
+		appsNamespace, ok, err := unstructured.NestedString(report.DSCI.Data.Data.Object, "spec", "applicationsNamespace")
+		if err == nil && ok {
+			log.Printf("DSCI applications namespace: %s", appsNamespace)
+		}
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	logAIGatewayCR(ctx)
+	logAIGatewayCRDSchema(ctx)
+	logAIGatewayDeployment(report)
+	logAIGatewayOperatorLogs(report)
+}
+
+func hasConditionStatus(conditions []clusterhealth.ConditionSummary, condType string, status metav1.ConditionStatus) bool {
+	for _, condition := range conditions {
+		if condition.Type == condType && condition.Status == string(status) {
+			return true
+		}
+	}
+	return false
+}
+
+func logAIGatewayCR(ctx context.Context) {
+	if globalDebugClient == nil {
+		log.Printf("AIGateway CR lookup skipped: no debug client available")
+		return
+	}
+
+	aigateway := &unstructured.Unstructured{}
+	aigateway.SetGroupVersionKind(gvk.AIGateway)
+	err := globalDebugClient.Get(ctx, types.NamespacedName{Name: componentApi.AIGatewayInstanceName}, aigateway)
+	switch {
+	case k8serr.IsNotFound(err):
+		log.Printf("AIGateway CR %s not found", componentApi.AIGatewayInstanceName)
+		return
+	case err != nil:
+		log.Printf("Failed to get AIGateway CR %s: %v", componentApi.AIGatewayInstanceName, err)
+		return
+	}
+
+	log.Printf("AIGateway CR %s found: generation=%d resourceVersion=%s", aigateway.GetName(), aigateway.GetGeneration(), aigateway.GetResourceVersion())
+
+	specKeys := sortedMapKeys(nestedMap(aigateway.Object, "spec"))
+	if len(specKeys) == 0 {
+		log.Printf("  AIGateway CR spec fields: none")
+	} else {
+		log.Printf("  AIGateway CR spec fields: %s", strings.Join(specKeys, ", "))
+	}
+
+	statusObj, statusFound, statusErr := unstructured.NestedMap(aigateway.Object, "status")
+	if statusErr != nil {
+		log.Printf("  Failed to inspect AIGateway CR status: %v", statusErr)
+		return
+	}
+	if !statusFound {
+		log.Printf("  AIGateway CR status is absent")
+		return
+	}
+
+	conditions, conditionsFound, conditionsErr := unstructured.NestedSlice(statusObj, "conditions")
+	if conditionsErr != nil {
+		log.Printf("  Failed to inspect AIGateway CR status.conditions: %v", conditionsErr)
+		return
+	}
+	if !conditionsFound || len(conditions) == 0 {
+		log.Printf("  AIGateway CR status.conditions is empty")
+		return
+	}
+
+	log.Printf("  AIGateway CR status.conditions count: %d", len(conditions))
+}
+
+func logAIGatewayCRDSchema(ctx context.Context) {
+	if globalDebugClient == nil {
+		log.Printf("AIGateway CRD lookup skipped: no debug client available")
+		return
+	}
+
+	crd := &unstructured.Unstructured{}
+	crd.SetGroupVersionKind(schema.GroupVersionKind{
+		Group:   "apiextensions.k8s.io",
+		Version: "v1",
+		Kind:    "CustomResourceDefinition",
+	})
+	err := globalDebugClient.Get(ctx, types.NamespacedName{Name: aiGatewayCRDName}, crd)
+	switch {
+	case k8serr.IsNotFound(err):
+		log.Printf("AIGateway CRD %s not found", aiGatewayCRDName)
+		return
+	case err != nil:
+		log.Printf("Failed to get AIGateway CRD %s: %v", aiGatewayCRDName, err)
+		return
+	}
+
+	specFields, hasModelsAsAService, err := aigatewayCRDSpecFields(crd)
+	if err != nil {
+		log.Printf("Failed to inspect AIGateway CRD schema: %v", err)
+		return
+	}
+
+	if len(specFields) == 0 {
+		log.Printf("AIGateway CRD spec fields: none discovered")
+	} else {
+		log.Printf("AIGateway CRD spec fields: %s", strings.Join(specFields, ", "))
+	}
+	if !hasModelsAsAService {
+		log.Printf("AIGateway CRD is missing spec.modelsAsAService")
+	}
+}
+
+func logAIGatewayDeployment(report *clusterhealth.Report) {
+	deployments := report.Deployments.Data.ByNamespace[testOpts.appsNamespace]
+	for _, deployment := range deployments {
+		if deployment.Name != aiGatewayOperatorDeploymentName {
+			continue
+		}
+		log.Printf("AIGateway deployment %s/%s: %d/%d ready", deployment.Namespace, deployment.Name, deployment.Ready, deployment.Replicas)
+		for _, condition := range deployment.Conditions {
+			log.Printf("  %s: %s - %s", condition.Type, condition.Status, redactSensitiveInfo(condition.Message))
+		}
+		return
+	}
+
+	log.Printf("AIGateway deployment %s/%s not found in deployment diagnostics", testOpts.appsNamespace, aiGatewayOperatorDeploymentName)
+}
+
+func logAIGatewayOperatorLogs(report *clusterhealth.Report) {
+	pod := latestAIGatewayOperatorPod(report.Pods.Data.Data)
+	if pod == nil {
+		log.Printf("AIGateway operator pod not found in namespace %s", testOpts.appsNamespace)
+		return
+	}
+
+	log.Printf("AIGateway operator pod %s/%s phase=%s", pod.Namespace, pod.Name, pod.Status.Phase)
+	logNamedContainerLogs(pod.Name, testManagerName, pod.Namespace, logTypeCurrent)
+}
+
+func latestAIGatewayOperatorPod(pods []corev1.Pod) *corev1.Pod {
+	var latest *corev1.Pod
+	for i := range pods {
+		pod := &pods[i]
+		if pod.Namespace != testOpts.appsNamespace || !strings.HasPrefix(pod.Name, aiGatewayOperatorDeploymentName+"-") {
+			continue
+		}
+		if latest == nil || pod.CreationTimestamp.After(latest.CreationTimestamp.Time) {
+			latest = pod
+		}
+	}
+	return latest
+}
+
+func logNamedContainerLogs(podName, containerName, namespace, logType string) {
+	log.Printf("        === LOGS (%s) for container %s ===", strings.ToUpper(logType), containerName)
+
+	logs, err := podLogsFetcher(namespace, podName, containerName, logType == logTypePrevious)
+	if err != nil {
+		log.Printf("        Failed to retrieve logs: %v", err)
+		return
+	}
+
+	if logs == "" {
+		log.Printf("        No logs available")
+		return
+	}
+
+	redactedLogs := redactSensitiveInfo(logs)
+	logLines := strings.Split(strings.TrimSpace(redactedLogs), "\n")
+	maxLines := 20
+	startIdx := 0
+	if len(logLines) > maxLines {
+		startIdx = len(logLines) - maxLines
+	}
+
+	for i := startIdx; i < len(logLines); i++ {
+		if strings.TrimSpace(logLines[i]) != "" {
+			log.Printf("        %s", logLines[i])
+		}
+	}
+
+	log.Printf("        === END LOGS ===")
+}
+
+func nestedMap(obj map[string]any, fields ...string) map[string]any {
+	result, found, err := unstructured.NestedMap(obj, fields...)
+	if err != nil || !found {
+		return nil
+	}
+	return result
+}
+
+func sortedMapKeys(values map[string]any) []string {
+	if len(values) == 0 {
+		return nil
+	}
+	keys := make([]string, 0, len(values))
+	for key := range values {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	return keys
+}
+
+func aigatewayCRDSpecFields(crd *unstructured.Unstructured) ([]string, bool, error) {
+	versions, found, err := unstructured.NestedSlice(crd.Object, "spec", "versions")
+	if err != nil {
+		return nil, false, fmt.Errorf("get CRD versions: %w", err)
+	}
+	if !found || len(versions) == 0 {
+		return nil, false, nil
+	}
+
+	for _, version := range versions {
+		versionMap, ok := version.(map[string]any)
+		if !ok {
+			continue
+		}
+
+		properties := nestedMap(versionMap, "schema", "openAPIV3Schema", "properties", "spec", "properties")
+		if len(properties) == 0 {
+			continue
+		}
+
+		fields := sortedMapKeys(properties)
+		_, hasModelsAsAService := properties["modelsAsAService"]
+		return fields, hasModelsAsAService, nil
+	}
+
+	return nil, false, nil
+}
+
 // logProblematicContainerLogs retrieves recent logs for containers that are failing or restarting.
 // It uses the raw Pod objects from the clusterhealth report to access container status details
 // needed for log retrieval decisions.
@@ -439,37 +687,7 @@ func determineLogType(containerStatus corev1.ContainerStatus) string {
 
 // logContainerLogs retrieves and displays the last few lines of container logs.
 func logContainerLogs(podName, containerName, namespace, logType string) {
-	log.Printf("        === LOGS (%s) for container %s ===", strings.ToUpper(logType), containerName)
-
-	logs, err := podLogsFetcher(namespace, podName, containerName, logType == "previous")
-	if err != nil {
-		log.Printf("        Failed to retrieve logs: %v", err)
-		return
-	}
-
-	if logs == "" {
-		log.Printf("        No logs available")
-		return
-	}
-
-	// Redact sensitive information before printing
-	redactedLogs := redactSensitiveInfo(logs)
-
-	// Print the last 10 lines of logs
-	logLines := strings.Split(strings.TrimSpace(redactedLogs), "\n")
-	maxLines := 10
-	startIdx := 0
-	if len(logLines) > maxLines {
-		startIdx = len(logLines) - maxLines
-	}
-
-	for i := startIdx; i < len(logLines); i++ {
-		if strings.TrimSpace(logLines[i]) != "" {
-			log.Printf("        %s", logLines[i])
-		}
-	}
-
-	log.Printf("        === END LOGS ===")
+	logNamedContainerLogs(podName, containerName, namespace, logType)
 }
 
 func TestLogPodsSectionContinuesWithPartialData(t *testing.T) {
@@ -541,6 +759,43 @@ func TestLogPodsSectionContinuesWithPartialData(t *testing.T) {
 	}
 	if !strings.Contains(output, "line-2") {
 		t.Fatalf("expected fetched pod log content in output, got: %s", output)
+	}
+}
+
+func TestAIGatewayCRDSpecFields(t *testing.T) {
+	crd := &unstructured.Unstructured{
+		Object: map[string]any{
+			"spec": map[string]any{
+				"versions": []any{
+					map[string]any{
+						"name": "v1alpha1",
+						"schema": map[string]any{
+							"openAPIV3Schema": map[string]any{
+								"properties": map[string]any{
+									"spec": map[string]any{
+										"properties": map[string]any{
+											"batchGateway":     map[string]any{},
+											"modelsAsAService": map[string]any{},
+										},
+									},
+								},
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+
+	fields, hasModelsAsAService, err := aigatewayCRDSpecFields(crd)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !hasModelsAsAService {
+		t.Fatalf("expected modelsAsAService to be detected, fields=%v", fields)
+	}
+	if got, want := strings.Join(fields, ","), "batchGateway,modelsAsAService"; got != want {
+		t.Fatalf("unexpected CRD fields %q, want %q", got, want)
 	}
 }
 
