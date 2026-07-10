@@ -5,6 +5,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/predicate"
 
 	"github.com/opendatahub-io/opendatahub-operator/v2/pkg/controller/predicates/dependent"
+	"github.com/opendatahub-io/opendatahub-operator/v2/pkg/controller/reconciler"
 )
 
 // moduleStatusPredicates returns predicates that include status changes for every module CR.
@@ -22,4 +23,20 @@ func moduleStatusPredicates() map[schema.GroupVersionKind][]predicate.Predicate 
 	})
 
 	return modulesPredicate
+}
+
+// registerModuleCROwnedTypes registers each module's CR GVK as a statically
+// owned type on the reconciler. This ensures the GC action's type predicate
+// (which checks rr.Controller.Owns()) returns true for module CRs from the
+// first reconcile, before dynamic ownership has a chance to discover them.
+func registerModuleCROwnedTypes(rec *reconciler.Reconciler) {
+	reg := DefaultRegistry()
+	if !reg.HasEntries() {
+		return
+	}
+
+	_ = reg.ForAll(func(h ModuleHandler, _ bool) error {
+		rec.AddOwnedType(h.GetGVK())
+		return nil
+	})
 }
