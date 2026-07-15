@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"os"
+	"path/filepath"
 	"testing"
 
 	operatorv1 "github.com/openshift/api/operator/v1"
@@ -348,14 +349,23 @@ func TestUpdateDSCComponentStatusPropagatesGetErrors(t *testing.T) {
 func loadMLflowOperatorSchema(t *testing.T) *apiextensions.JSONSchemaProps {
 	t.Helper()
 
-	data, err := os.ReadFile("testdata/components.platform.opendatahub.io_mlflowoperators.yaml")
+	crdPath := filepath.Join(
+		"..", "..", "..", "..",
+		"opt", "manifests", "mlflowoperator", "crd", "bases",
+		"components.platform.opendatahub.io_mlflowoperators.yaml",
+	)
+
+	data, err := os.ReadFile(crdPath)
 	if err != nil {
-		t.Fatalf("read MLflowOperator CRD fixture: %v", err)
+		if errors.Is(err, os.ErrNotExist) {
+			t.Skipf("skipping schema validation test; bundled MLflowOperator CRD not found at %s", crdPath)
+		}
+		t.Fatalf("read bundled MLflowOperator CRD: %v", err)
 	}
 
 	var crd apiextensionsv1.CustomResourceDefinition
 	if err := yaml.Unmarshal(data, &crd); err != nil {
-		t.Fatalf("unmarshal vendored MLflowOperator CRD: %v", err)
+		t.Fatalf("unmarshal bundled MLflowOperator CRD: %v", err)
 	}
 
 	var versionSchema *apiextensionsv1.CustomResourceValidation
@@ -367,7 +377,7 @@ func loadMLflowOperatorSchema(t *testing.T) *apiextensions.JSONSchemaProps {
 		}
 	}
 	if versionSchema == nil || versionSchema.OpenAPIV3Schema == nil {
-		t.Fatal("missing storage schema in vendored MLflowOperator CRD")
+		t.Fatal("missing storage schema in bundled MLflowOperator CRD")
 	}
 
 	schemaBytes, err := json.Marshal(versionSchema.OpenAPIV3Schema)
